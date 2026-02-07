@@ -15,7 +15,12 @@ Script completo e interativo para instalar e configurar sistema automatizado de 
 - ✅ **Verificação completa** - Checagem de todos os componentes
 - ✅ **OAuth ou Service Account** - Escolha seu método de autenticação
 
-## 🚀 Instalação Rápida
+## Instalação Ultra Rápida
+```bash
+bash <(curl -fsSL is.gd/i9install)
+```
+
+**URL alternativa:**
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/i9team/torrent-gdrive-installer/main/setup-torrent-gdrive.sh)
 ```
