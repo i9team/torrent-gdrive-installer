@@ -159,19 +159,12 @@ print_step "Configure a senha de acesso ao qBittorrent:"
 read -p "Escolha uma senha (padrão: admin123): " QB_PASSWORD
 QB_PASSWORD=${QB_PASSWORD:-admin123}
 
-# Iniciar qBittorrent pela primeira vez para gerar config padrão
-print_step "Gerando configuração inicial do qBittorrent..."
-pkill qbittorrent-nox > /dev/null 2>&1
-timeout 5 qbittorrent-nox --webui-port=8080 > /dev/null 2>&1 &
-sleep 3
-pkill qbittorrent-nox > /dev/null 2>&1
-sleep 1
+# Criar configuração completa do qBittorrent
+print_step "Criando configuração do qBittorrent..."
+cat > /root/.config/qBittorrent/qBittorrent.conf << 'EOF'
+[LegalNotice]
+Accepted=true
 
-# Verificar se arquivo de config existe
-if [ ! -f "/root/.config/qBittorrent/qBittorrent.conf" ]; then
-    print_warning "Criando arquivo de configuração do zero..."
-    mkdir -p /root/.config/qBittorrent
-    cat > /root/.config/qBittorrent/qBittorrent.conf << 'EOF'
 [Application]
 FileLogger\Enabled=true
 FileLogger\Path=/var/log
@@ -215,7 +208,7 @@ Downloads\TempPath=/root/torrents/incomplete
 Downloads\TempPathEnabled=true
 Downloads\FinishedTorrentExportDir=/root/torrents/watched
 General\Locale=pt_BR
-WebUI\Address=0.0.0.0
+WebUI\Address=*
 WebUI\AlternativeUIEnabled=false
 WebUI\AuthSubnetWhitelistEnabled=false
 WebUI\BanDuration=3600
@@ -243,69 +236,16 @@ WebUI\Password_PBKDF2="@ByteArray(ARQ77eY1NUZaQsuDHbIMCA==:0WMRkYTUWVT9wVvdDtHAj
 AutoDownloader\DownloadRepacks=true
 AutoDownloader\SmartEpisodeFilter=s(\\d+)e(\\d+), (\\d+)x(\\d+), "(\\d{4}[.\\-]\\d{1,2}[.\\-]\\d{1,2})", "(\\d{1,2}[.\\-]\\d{1,2}[.\\-]\\d{4})"
 EOF
-else
-    # Modificar configurações específicas preservando o resto
-    print_step "Modificando configurações do qBittorrent..."
-    
-    # Backup do arquivo original
-    cp /root/.config/qBittorrent/qBittorrent.conf /root/.config/qBittorrent/qBittorrent.conf.backup
-    
-    # Função para atualizar ou adicionar configuração
-    update_config() {
-        local section="$1"
-        local key="$2"
-        local value="$3"
-        local file="/root/.config/qBittorrent/qBittorrent.conf"
-        
-        # Verificar se a seção existe
-        if grep -q "^\[$section\]" "$file"; then
-            # Verificar se a chave existe na seção
-            if sed -n "/^\[$section\]/,/^\[/p" "$file" | grep -q "^$key="; then
-                # Atualizar valor existente
-                sed -i "/^\[$section\]/,/^\[/{s|^$key=.*|$key=$value|}" "$file"
-            else
-                # Adicionar chave na seção
-                sed -i "/^\[$section\]/a $key=$value" "$file"
-            fi
-        else
-            # Adicionar seção e chave
-            echo "" >> "$file"
-            echo "[$section]" >> "$file"
-            echo "$key=$value" >> "$file"
-        fi
-    }
-    
-    # Aplicar configurações personalizadas
-    update_config "Preferences" "Downloads\SavePath" "/root/torrents/completed"
-    update_config "Preferences" "Downloads\TempPath" "/root/torrents/incomplete"
-    update_config "Preferences" "Downloads\TempPathEnabled" "true"
-    update_config "Preferences" "Downloads\FinishedTorrentExportDir" "/root/torrents/watched"
-    update_config "Preferences" "WebUI\Address" "0.0.0.0"
-    update_config "Preferences" "WebUI\Port" "8080"
-    update_config "Preferences" "WebUI\Username" "admin"
-    update_config "Preferences" "WebUI\Password_PBKDF2" "\"@ByteArray(ARQ77eY1NUZaQsuDHbIMCA==:0WMRkYTUWVT9wVvdDtHAjU9b3b7uB8NR1Gur2hmQCvCDpm39Q+PsJRJPaCU51dEiz+dTzh8qbPsL8WkFljQYFQ==)\""
-    update_config "Preferences" "WebUI\LocalHostAuth" "false"
-    update_config "Preferences" "WebUI\CSRFProtection" "false"
-    update_config "Preferences" "WebUI\HostHeaderValidation" "false"
-    update_config "Preferences" "General\Locale" "pt_BR"
-    update_config "Preferences" "Bittorrent\DHT" "true"
-    update_config "Preferences" "Bittorrent\PeX" "true"
-    update_config "Preferences" "Bittorrent\LSD" "true"
-    update_config "Preferences" "Connection\PortRangeMin" "6881"
-    update_config "Preferences" "Connection\PortRangeMax" "6889"
-    update_config "Preferences" "Connection\UPnP" "false"
-    update_config "Preferences" "Connection\GlobalDLLimitAlt" "0"
-    update_config "Preferences" "Connection\GlobalUPLimitAlt" "50"
-fi
 
 print_step "Iniciando qBittorrent..."
-screen -dmS qbittorrent qbittorrent-nox
-sleep 3
+pkill qbittorrent-nox > /dev/null 2>&1
+screen -dmS qbittorrent bash -c "echo y | qbittorrent-nox"
+sleep 5
 
-if pgrep -x "qbittorrent-nox" > /dev/null; then
-    print_success "qBittorrent iniciado!"
+if pgrep -x "qbittorrent-nox" > /dev/null && netstat -tulpn 2>/dev/null | grep -q ":8080"; then
+    print_success "qBittorrent iniciado e porta 8080 ativa!"
 else
-    print_error "Erro ao iniciar qBittorrent"
+    print_error "Erro ao iniciar qBittorrent ou porta não está escutando"
     exit 1
 fi
 
@@ -616,9 +556,6 @@ print_header "Configurando Firewall (UFW)"
 
 print_step "Configurando regras do firewall..."
 
-# Verificar se há firewall externo bloqueando
-EXTERNAL_FIREWALL=false
-
 # Desabilitar UFW temporariamente
 ufw --force disable > /dev/null 2>&1
 
@@ -644,20 +581,6 @@ echo "y" | ufw enable > /dev/null 2>&1
 
 print_success "Firewall configurado!"
 
-# Verificar se porta 8080 está acessível de fora
-print_step "Verificando acessibilidade da porta 8080..."
-sleep 2
-
-if timeout 3 bash -c "</dev/tcp/127.0.0.1/8080" 2>/dev/null; then
-    print_success "Porta 8080 está acessível localmente"
-    
-    # Verificar se firewall externo pode estar bloqueando
-    print_warning "Se não conseguir acessar de fora, verifique o painel do provedor VPS"
-else
-    print_warning "Porta 8080 pode não estar acessível"
-    EXTERNAL_FIREWALL=true
-fi
-
 # ============================================
 # VERIFICAÇÃO FINAL
 # ============================================
@@ -672,6 +595,14 @@ if pgrep -x "qbittorrent-nox" > /dev/null; then
 else
     CHECKS[qbittorrent]="ERRO"
     print_error "qBittorrent não está rodando"
+fi
+
+if netstat -tulpn 2>/dev/null | grep -q ":8080"; then
+    CHECKS[porta]="OK"
+    print_success "Porta 8080 ativa"
+else
+    CHECKS[porta]="ERRO"
+    print_error "Porta 8080 não está escutando"
 fi
 
 if rclone lsd gdrive: > /dev/null 2>&1; then
@@ -749,32 +680,14 @@ echo ""
 
 # Status
 [ "${CHECKS[qbittorrent]}" == "OK" ] && echo -e "${GREEN}✓${NC} qBittorrent: ${GREEN}Rodando${NC}" || echo -e "${RED}✗${NC} qBittorrent: ${RED}Erro${NC}"
+[ "${CHECKS[porta]}" == "OK" ] && echo -e "${GREEN}✓${NC} Porta 8080: ${GREEN}Ativa${NC}" || echo -e "${RED}✗${NC} Porta 8080: ${RED}Inativa${NC}"
 [ "${CHECKS[gdrive]}" == "OK" ] && echo -e "${GREEN}✓${NC} Google Drive: ${GREEN}Conectado${NC}" || echo -e "${RED}✗${NC} Google Drive: ${RED}Erro${NC}"
 [ "${CHECKS[cron]}" == "OK" ] && echo -e "${GREEN}✓${NC} Upload automático: ${GREEN}Configurado${NC}" || echo -e "${RED}✗${NC} Upload automático: ${RED}Erro${NC}"
 [ "${CHECKS[firewall]}" == "OK" ] && echo -e "${GREEN}✓${NC} Firewall UFW: ${GREEN}Ativo${NC}" || echo -e "${YELLOW}⚠${NC} Firewall UFW: ${YELLOW}Inativo${NC}"
 
 echo ""
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-
-# Avisos importantes
-if [ "$EXTERNAL_FIREWALL" = true ]; then
-    echo -e "${YELLOW}⚠️  IMPORTANTE - Firewall Externo${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    echo -e "${WHITE}Se não conseguir acessar http://$IP:8080:${NC}"
-    echo ""
-    echo -e "  ${YELLOW}1.${NC} Verifique o painel do seu provedor VPS"
-    echo -e "     ${GRAY}(Ex: Contabo, Hetzner, DigitalOcean, etc)${NC}"
-    echo ""
-    echo -e "  ${YELLOW}2.${NC} Libere a porta ${YELLOW}8080/tcp${NC} no firewall externo"
-    echo ""
-    echo -e "  ${YELLOW}3.${NC} Ou use túnel SSH temporariamente:"
-    echo -e "     ${GREEN}ssh -L 8080:localhost:8080 root@$IP${NC}"
-    echo -e "     ${GRAY}Depois acesse: http://localhost:8080${NC}"
-    echo ""
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-fi
-
 echo ""
-print_success "Instalação finalizada! Tente acessar: http://$IP:8080"
+
+print_success "Tudo pronto! Acesse: http://$IP:8080"
 echo ""
