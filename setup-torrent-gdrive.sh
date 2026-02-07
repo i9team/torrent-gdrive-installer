@@ -159,9 +159,37 @@ print_step "Configure a senha de acesso ao qBittorrent:"
 read -p "Escolha uma senha (padrão: admin123): " QB_PASSWORD
 QB_PASSWORD=${QB_PASSWORD:-admin123}
 
+# Gerar hash da senha usando Python
+print_step "Gerando hash da senha..."
+QB_PASSWORD_HASH=$(python3 << EOF
+import hashlib
+import base64
+
+password = "$QB_PASSWORD"
+salt = b'\x00' * 16  # Salt vazio para simplicidade
+
+# PBKDF2 com SHA512
+iterations = 100000
+dk = hashlib.pbkdf2_hmac('sha512', password.encode(), salt, iterations, dklen=64)
+
+# Formato: @ByteArray(SALT_BASE64:HASH_BASE64)
+salt_b64 = base64.b64encode(salt).decode()
+hash_b64 = base64.b64encode(dk).decode()
+
+print(f'@ByteArray({salt_b64}:{hash_b64})')
+EOF
+)
+
+if [ -z "$QB_PASSWORD_HASH" ]; then
+    print_error "Erro ao gerar hash da senha"
+    exit 1
+fi
+
+print_success "Hash gerado com sucesso"
+
 # Criar configuração completa do qBittorrent
 print_step "Criando configuração do qBittorrent..."
-cat > /root/.config/qBittorrent/qBittorrent.conf << 'EOF'
+cat > /root/.config/qBittorrent/qBittorrent.conf << EOF
 [LegalNotice]
 Accepted=true
 
@@ -230,7 +258,7 @@ WebUI\ServerDomains=*
 WebUI\SessionTimeout=3600
 WebUI\UseUPnP=false
 WebUI\Username=admin
-WebUI\Password_PBKDF2="@ByteArray(ARQ77eY1NUZaQsuDHbIMCA==:0WMRkYTUWVT9wVvdDtHAjU9b3b7uB8NR1Gur2hmQCvCDpm39Q+PsJRJPaCU51dEiz+dTzh8qbPsL8WkFljQYFQ==)"
+WebUI\Password_PBKDF2="$QB_PASSWORD_HASH"
 
 [RSS]
 AutoDownloader\DownloadRepacks=true
