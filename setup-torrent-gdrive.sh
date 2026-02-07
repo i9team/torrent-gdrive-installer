@@ -154,42 +154,10 @@ print_success "Estrutura de pastas criada"
 # ============================================
 print_header "ETAPA 4/6: Configurando qBittorrent Web UI"
 
-echo ""
-print_step "Configure a senha de acesso ao qBittorrent:"
-read -p "Escolha uma senha (padrão: admin123): " QB_PASSWORD
-QB_PASSWORD=${QB_PASSWORD:-admin123}
-
-# Gerar hash da senha usando Python
-print_step "Gerando hash da senha..."
-QB_PASSWORD_HASH=$(python3 << EOF
-import hashlib
-import base64
-
-password = "$QB_PASSWORD"
-salt = b'\x00' * 16  # Salt vazio para simplicidade
-
-# PBKDF2 com SHA512
-iterations = 100000
-dk = hashlib.pbkdf2_hmac('sha512', password.encode(), salt, iterations, dklen=64)
-
-# Formato: @ByteArray(SALT_BASE64:HASH_BASE64)
-salt_b64 = base64.b64encode(salt).decode()
-hash_b64 = base64.b64encode(dk).decode()
-
-print(f'@ByteArray({salt_b64}:{hash_b64})')
-EOF
-)
-
-if [ -z "$QB_PASSWORD_HASH" ]; then
-    print_error "Erro ao gerar hash da senha"
-    exit 1
-fi
-
-print_success "Hash gerado com sucesso"
-
-# Criar configuração completa do qBittorrent
 print_step "Criando configuração do qBittorrent..."
-cat > /root/.config/qBittorrent/qBittorrent.conf << EOF
+
+# Criar configuração completa do qBittorrent (SEM senha - usará a padrão temporária)
+cat > /root/.config/qBittorrent/qBittorrent.conf << 'EOF'
 [LegalNotice]
 Accepted=true
 
@@ -258,15 +226,23 @@ WebUI\ServerDomains=*
 WebUI\SessionTimeout=3600
 WebUI\UseUPnP=false
 WebUI\Username=admin
-WebUI\Password_PBKDF2="$QB_PASSWORD_HASH"
 
 [RSS]
 AutoDownloader\DownloadRepacks=true
 AutoDownloader\SmartEpisodeFilter=s(\\d+)e(\\d+), (\\d+)x(\\d+), "(\\d{4}[.\\-]\\d{1,2}[.\\-]\\d{1,2})", "(\\d{1,2}[.\\-]\\d{1,2}[.\\-]\\d{4})"
 EOF
 
-print_step "Iniciando qBittorrent..."
+print_step "Iniciando qBittorrent pela primeira vez..."
 pkill qbittorrent-nox > /dev/null 2>&1
+sleep 2
+
+# Capturar a senha temporária gerada pelo qBittorrent
+TEMP_OUTPUT=$(timeout 10 qbittorrent-nox 2>&1)
+TEMP_PASSWORD=$(echo "$TEMP_OUTPUT" | grep -oP 'temporary password is provided for this session: \K\w+' | head -1)
+
+# Parar e reiniciar em background
+pkill qbittorrent-nox
+sleep 2
 screen -dmS qbittorrent bash -c "echo y | qbittorrent-nox"
 sleep 5
 
@@ -679,7 +655,12 @@ echo ""
 echo -e "${GREEN}🌐 qBittorrent Web Interface:${NC}"
 echo -e "   ${WHITE}URL:${NC} ${YELLOW}http://$IP:8080${NC}"
 echo -e "   ${WHITE}Usuário:${NC} ${YELLOW}admin${NC}"
-echo -e "   ${WHITE}Senha:${NC} ${YELLOW}$QB_PASSWORD${NC}"
+if [ -n "$TEMP_PASSWORD" ]; then
+    echo -e "   ${WHITE}Senha temporária:${NC} ${YELLOW}$TEMP_PASSWORD${NC}"
+    echo -e "   ${GRAY}(Altere a senha no primeiro acesso)${NC}"
+else
+    echo -e "   ${WHITE}Senha:${NC} ${YELLOW}Verifique os logs ou defina no primeiro acesso${NC}"
+fi
 echo ""
 echo -e "${GREEN}📁 Google Drive:${NC}"
 echo -e "   ${WHITE}Pasta:${NC} ${YELLOW}gdrive:$GDRIVE_FOLDER${NC}"
