@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Cores melhoradas para melhor visibilidade
+# Cores para output
 RED='\033[1;31m'
 GREEN='\033[1;32m'
 YELLOW='\033[1;33m'
@@ -24,6 +24,21 @@ print_header() {
     echo ""
 }
 
+# Spinner para processos longos
+spinner() {
+    local pid=$1
+    local delay=0.1
+    local spinstr='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    while [ "$(ps a | awk '{print $1}' | grep $pid)" ]; do
+        local temp=${spinstr#?}
+        printf " [${BLUE}%c${NC}]  " "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+        printf "\b\b\b\b\b\b"
+    done
+    printf "    \b\b\b\b"
+}
+
 # Verifica se está rodando como root
 if [ "$EUID" -ne 0 ]; then 
     print_error "Execute este script como root: sudo bash $0"
@@ -40,47 +55,29 @@ cat << "EOF"
 ║   ✓ rclone (Google Drive Sync)                                   ║
 ║   ✓ Upload automático via Cron                                   ║
 ║   ✓ Scripts de monitoramento                                     ║
-║                                                                   ║
-║   Desenvolvido para VPS Ubuntu/Debian                            ║
+║   ✓ Configuração automática de firewall                          ║
 ║                                                                   ║
 ╚═══════════════════════════════════════════════════════════════════╝
 EOF
 
 echo ""
-print_warning "Este script irá instalar e configurar:"
-echo -e "  ${GRAY}• qBittorrent-nox (cliente torrent sem interface gráfica)${NC}"
-echo -e "  ${GRAY}• rclone (sincronização com Google Drive)${NC}"
-echo -e "  ${GRAY}• Scripts de automação e monitoramento${NC}"
-echo -e "  ${GRAY}• Cron jobs para upload automático${NC}"
-echo ""
-read -p "Deseja continuar? [S/n]: " CONFIRM
-if [[ "$CONFIRM" =~ ^[Nn]$ ]]; then
-    print_error "Instalação cancelada."
-    exit 0
-fi
+read -p "Pressione ENTER para continuar ou Ctrl+C para cancelar..."
 
 # ============================================
 # ETAPA 1: Atualização do sistema
 # ============================================
 print_header "ETAPA 1/6: Atualizando Sistema"
-print_step "Atualizando lista de pacotes..."
-apt update -qq 2>&1 | grep -v "apt does not have a stable CLI interface"
-print_success "Sistema atualizado com sucesso!"
+print_step "Atualizando pacotes do sistema..."
+apt update > /dev/null 2>&1 & spinner $!
+print_success "Sistema atualizado!"
 
 # ============================================
 # ETAPA 2: Instalação de dependências
 # ============================================
 print_header "ETAPA 2/6: Instalando Dependências"
-PACKAGES="qbittorrent-nox rclone curl screen python3 python3-pip speedtest-cli nload iftop wget net-tools jq"
-print_step "Instalando pacotes: $PACKAGES"
-apt install -y $PACKAGES > /dev/null 2>&1
-print_success "Todas as dependências instaladas!"
-
-# Verificar instalações
-print_info "Verificando versões instaladas:"
-echo -e "  ${GRAY}• qBittorrent: $(qbittorrent-nox --version 2>&1 | head -1)${NC}"
-echo -e "  ${GRAY}• rclone: $(rclone version | head -1)${NC}"
-echo -e "  ${GRAY}• Python: $(python3 --version)${NC}"
+print_step "Instalando pacotes necessários..."
+apt install -y qbittorrent-nox rclone curl screen python3 python3-pip speedtest-cli nload iftop wget net-tools jq ufw > /dev/null 2>&1 & spinner $!
+print_success "Dependências instaladas!"
 
 # ============================================
 # ETAPA 3: Configuração de pastas
@@ -89,10 +86,7 @@ print_header "ETAPA 3/6: Criando Estrutura de Diretórios"
 mkdir -p /root/torrents/{completed,incomplete,watched}
 mkdir -p /root/.config/qBittorrent
 mkdir -p /var/log
-print_success "Estrutura de pastas criada:"
-echo -e "  ${GRAY}├─ /root/torrents/completed   (downloads finalizados)${NC}"
-echo -e "  ${GRAY}├─ /root/torrents/incomplete  (downloads em andamento)${NC}"
-echo -e "  ${GRAY}└─ /root/torrents/watched     (pasta monitorada)${NC}"
+print_success "Estrutura de pastas criada"
 
 # ============================================
 # ETAPA 4: Configuração do qBittorrent
@@ -104,7 +98,6 @@ print_step "Configure a senha de acesso ao qBittorrent:"
 read -p "Escolha uma senha (padrão: admin123): " QB_PASSWORD
 QB_PASSWORD=${QB_PASSWORD:-admin123}
 
-# Gerar hash da senha (usando senha padrão para simplificar)
 QB_HASH='@ByteArray(ARQ77eY1NUZaQsuDHbIMCA==:0WMRkYTUWVT9wVvdDtHAjU9b3b7uB8NR1Gur2hmQCvCDpm39Q+PsJRJPaCU51dEiz+dTzh8qbPsL8WkFljQYFQ==)'
 
 cat > /root/.config/qBittorrent/qBittorrent.conf << EOF
@@ -133,14 +126,13 @@ Connection\GlobalDLLimitAlt=0
 Connection\GlobalUPLimitAlt=50
 EOF
 
-# Iniciar qBittorrent
-print_step "Iniciando qBittorrent em background..."
-pkill qbittorrent-nox 2>/dev/null
+print_step "Iniciando qBittorrent..."
+pkill qbittorrent-nox > /dev/null 2>&1
 screen -dmS qbittorrent qbittorrent-nox
 sleep 3
 
 if pgrep -x "qbittorrent-nox" > /dev/null; then
-    print_success "qBittorrent iniciado com sucesso!"
+    print_success "qBittorrent iniciado!"
 else
     print_error "Erro ao iniciar qBittorrent"
     exit 1
@@ -155,12 +147,10 @@ echo ""
 print_step "Escolha o método de autenticação:"
 echo ""
 echo -e "  ${GREEN}1)${NC} ${WHITE}OAuth (Recomendado)${NC}"
-echo -e "     ${GRAY}→ Requer PC local para autorização${NC}"
 echo -e "     ${GRAY}→ Mais fácil e rápido${NC}"
 echo ""
 echo -e "  ${GREEN}2)${NC} ${WHITE}Service Account${NC}"
-echo -e "     ${GRAY}→ Requer arquivo JSON do Google Cloud${NC}"
-echo -e "     ${GRAY}→ Melhor para uso em produção${NC}"
+echo -e "     ${GRAY}→ Melhor para produção${NC}"
 echo ""
 read -p "Escolha [1 ou 2]: " AUTH_METHOD
 
@@ -171,96 +161,35 @@ if [ "$AUTH_METHOD" == "1" ]; then
     cat << 'EOF'
 
 ╔════════════════════════════════════════════════════════════════════╗
-║  📋 TUTORIAL: Criando Credenciais OAuth (Google Cloud Console)   ║
+║  📋 TUTORIAL: Criando Credenciais OAuth                           ║
 ╚════════════════════════════════════════════════════════════════════╝
 
-┌─ PASSO 1: Acessar Google Cloud Console ──────────────────────────┐
-│  🔗 https://console.cloud.google.com/                             │
-└───────────────────────────────────────────────────────────────────┘
-
-┌─ PASSO 2: Criar Novo Projeto ────────────────────────────────────┐
-│  • Clique em "Select a project" (topo da página)                 │
-│  • Clique em "New Project"                                       │
-│  • Nome do projeto: rclone-drive                                 │
-│  • Clique em "Create"                                            │
-└───────────────────────────────────────────────────────────────────┘
-
-┌─ PASSO 3: Ativar Google Drive API ───────────────────────────────┐
-│  • Menu ☰ > "APIs & Services" > "Library"                        │
-│  • Busque: "Google Drive API"                                    │
-│  • Clique em "Enable"                                            │
-└───────────────────────────────────────────────────────────────────┘
-
-┌─ PASSO 4: Configurar Tela de Consentimento ──────────────────────┐
-│  • Menu ☰ > "APIs & Services" > "OAuth consent screen"           │
-│  • User Type: selecione "External"                               │
-│  • Clique em "Create"                                            │
-│                                                                   │
-│  Preencha:                                                        │
-│  • App name: Rclone                                              │
-│  • User support email: seu email                                 │
-│  • Developer contact: seu email                                  │
-│  • Clique em "Save and Continue" (3 vezes)                       │
-│                                                                   │
-│  Test users:                                                      │
-│  • Clique em "Add Users"                                         │
-│  • Adicione seu email do Google                                  │
-│  • Clique em "Save and Continue"                                 │
-└───────────────────────────────────────────────────────────────────┘
-
-┌─ PASSO 5: Criar Credenciais OAuth ───────────────────────────────┐
-│  • Menu ☰ > "APIs & Services" > "Credentials"                    │
-│  • Clique em "+ Create Credentials"                              │
-│  • Selecione "OAuth client ID"                                   │
-│  • Application type: "Desktop app"                               │
-│  • Name: rclone                                                  │
-│  • Clique em "Create"                                            │
-└───────────────────────────────────────────────────────────────────┘
-
-┌─ PASSO 6: Copiar Credenciais ────────────────────────────────────┐
-│  Uma janela popup vai aparecer com:                              │
-│  • Client ID (xxx.apps.googleusercontent.com)                    │
-│  • Client Secret (GOCSPX-xxx)                                    │
-│                                                                   │
-│  ⚠️  COPIE AMBOS! Você vai precisar deles.                        │
-└───────────────────────────────────────────────────────────────────┘
+1️⃣  https://console.cloud.google.com/
+2️⃣  Criar projeto: "rclone-drive"
+3️⃣  Ativar: Google Drive API
+4️⃣  OAuth consent screen → External → Preencher dados
+5️⃣  Credentials → Create OAuth Client ID → Desktop app
+6️⃣  Copiar Client ID e Client Secret
 
 EOF
 
-    read -p "Pressione ENTER quando tiver as credenciais prontas..."
+    read -p "Pressione ENTER quando tiver as credenciais..."
     
-    echo ""
-    print_step "Cole suas credenciais do Google Cloud Console:"
     echo ""
     read -p "Client ID: " CLIENT_ID
     read -p "Client Secret: " CLIENT_SECRET
     
     echo ""
-    print_warning "IMPORTANTE: Autorização no PC Local"
+    print_warning "No seu PC, execute:"
     echo ""
-    print_info "Você precisa ter rclone instalado no seu PC para autorizar."
-    echo ""
-    echo -e "${GRAY}Instalação rclone no PC:${NC}"
-    echo -e "  ${BLUE}Windows:${NC} https://rclone.org/downloads/"
-    echo -e "  ${BLUE}Linux/Mac:${NC} curl https://rclone.org/install.sh | sudo bash"
-    echo ""
-    print_step "Execute este comando NO SEU PC (Windows/Linux/Mac):"
-    echo ""
-    echo -e "${GREEN}┌────────────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${GREEN}│${NC} ${WHITE}rclone authorize \"drive\" \"$CLIENT_ID\" \"$CLIENT_SECRET\"${NC}"
-    echo -e "${GREEN}└────────────────────────────────────────────────────────────────┘${NC}"
-    echo ""
-    print_info "O navegador vai abrir automaticamente."
-    print_info "Faça login na sua conta Google e autorize o acesso."
-    print_info "Depois, copie TODO o TOKEN JSON que aparecer no terminal."
+    echo -e "${GREEN}rclone authorize \"drive\" \"$CLIENT_ID\" \"$CLIENT_SECRET\"${NC}"
     echo ""
     read -p "Pressione ENTER quando estiver pronto para colar o token..."
     
     echo ""
-    print_step "Cole o TOKEN JSON completo (começa com { e termina com }):"
+    print_step "Cole o TOKEN JSON completo:"
     read -r TOKEN
     
-    # Criar config do rclone
     mkdir -p /root/.config/rclone
     cat > /root/.config/rclone/rclone.conf << EOF
 [gdrive]
@@ -273,78 +202,34 @@ EOF
     
 else
     # ===== SERVICE ACCOUNT =====
-    print_header "Configuração Service Account - Google Drive"
+    print_header "Configuração Service Account"
     
     cat << 'EOF'
 
 ╔════════════════════════════════════════════════════════════════════╗
-║  📋 TUTORIAL: Criando Service Account (Google Cloud Console)     ║
+║  📋 TUTORIAL: Service Account                                     ║
 ╚════════════════════════════════════════════════════════════════════╝
 
-┌─ PASSO 1: Acessar Google Cloud Console ──────────────────────────┐
-│  🔗 https://console.cloud.google.com/                             │
-└───────────────────────────────────────────────────────────────────┘
-
-┌─ PASSO 2: Criar Projeto (se não tiver) ──────────────────────────┐
-│  • Clique em "Select a project"                                  │
-│  • Clique em "New Project"                                       │
-│  • Nome: rclone-drive                                            │
-│  • Clique em "Create"                                            │
-└───────────────────────────────────────────────────────────────────┘
-
-┌─ PASSO 3: Ativar Google Drive API ───────────────────────────────┐
-│  • Menu ☰ > "APIs & Services" > "Library"                        │
-│  • Busque: "Google Drive API"                                    │
-│  • Clique em "Enable"                                            │
-└───────────────────────────────────────────────────────────────────┘
-
-┌─ PASSO 4: Criar Service Account ─────────────────────────────────┐
-│  • Menu ☰ > "IAM & Admin" > "Service Accounts"                   │
-│  • Clique em "+ Create Service Account"                          │
-│  • Nome: rclone-gdrive                                           │
-│  • Clique em "Create and Continue"                               │
-│  • Skip permissões (clique em "Continue")                        │
-│  • Clique em "Done"                                              │
-└───────────────────────────────────────────────────────────────────┘
-
-┌─ PASSO 5: Baixar Chave JSON ─────────────────────────────────────┐
-│  • Clique na Service Account que você criou                      │
-│  • Vá em "Keys" > "Add Key" > "Create New Key"                   │
-│  • Selecione "JSON"                                              │
-│  • Clique em "Create"                                            │
-│  • O arquivo JSON será baixado automaticamente                   │
-└───────────────────────────────────────────────────────────────────┘
-
-┌─ PASSO 6: Compartilhar Pasta do Google Drive ────────────────────┐
-│  • Abra o arquivo JSON baixado                                   │
-│  • Copie o email (ex: xxx@xxx.iam.gserviceaccount.com)           │
-│  • No Google Drive, clique com botão direito na pasta            │
-│  • Clique em "Compartilhar"                                      │
-│  • Cole o email da Service Account                               │
-│  • Dê permissão de "Editor"                                      │
-│  • Clique em "Enviar"                                            │
-└───────────────────────────────────────────────────────────────────┘
+1️⃣  https://console.cloud.google.com/
+2️⃣  IAM & Admin → Service Accounts → Create
+3️⃣  Keys → Add Key → Create New Key → JSON
+4️⃣  Compartilhar pasta Drive com email da service account
 
 EOF
 
-    read -p "Pressione ENTER quando tiver o arquivo JSON..."
+    read -p "Pressione ENTER quando tiver o JSON..."
     
     echo ""
-    print_step "Cole TODO o conteúdo do arquivo JSON abaixo:"
-    print_info "(Abra o arquivo .json, selecione tudo, copie e cole aqui)"
-    echo ""
+    print_step "Cole o conteúdo do arquivo JSON:"
     
-    # Ler múltiplas linhas
     JSON_CONTENT=""
     while IFS= read -r line; do
         JSON_CONTENT+="$line"
         [[ "$line" == *"}"* ]] && break
     done
     
-    # Salvar JSON
     echo "$JSON_CONTENT" > /root/gdrive-service-account.json
     
-    # Criar config do rclone
     mkdir -p /root/.config/rclone
     cat > /root/.config/rclone/rclone.conf << EOF
 [gdrive]
@@ -357,53 +242,38 @@ fi
 # Testar conexão
 echo ""
 print_step "Testando conexão com Google Drive..."
-sleep 2
-
 if rclone lsd gdrive: > /dev/null 2>&1; then
-    print_success "Conexão com Google Drive estabelecida com sucesso!"
-    echo ""
-    print_info "Pastas encontradas no Google Drive:"
-    rclone lsd gdrive: | head -5 | while read line; do
-        echo -e "  ${GRAY}• $line${NC}"
-    done
+    print_success "Conexão estabelecida!"
 else
-    print_error "Erro ao conectar com Google Drive!"
-    print_warning "Verifique as credenciais e tente novamente."
+    print_error "Erro na conexão com Google Drive"
     exit 1
 fi
 
-# Nome da pasta no Google Drive
+# Nome da pasta
 echo ""
-print_step "Configuração da pasta de destino no Google Drive:"
-read -p "Nome da pasta para uploads (padrão: VPS-DOWNLOADS): " GDRIVE_FOLDER
+read -p "Nome da pasta no Google Drive (padrão: VPS-DOWNLOADS): " GDRIVE_FOLDER
 GDRIVE_FOLDER=${GDRIVE_FOLDER:-VPS-DOWNLOADS}
 
-# Criar pasta no Google Drive
-print_step "Criando pasta '$GDRIVE_FOLDER' no Google Drive..."
 rclone mkdir "gdrive:$GDRIVE_FOLDER" 2>/dev/null
 print_success "Pasta configurada: gdrive:$GDRIVE_FOLDER"
 
 # ============================================
-# ETAPA 6: Criar scripts de automação
+# ETAPA 6: Criar scripts e configurar cron
 # ============================================
-print_header "ETAPA 6/6: Criando Scripts de Automação"
+print_header "ETAPA 6/6: Criando Scripts e Configurando Automação"
 
-# Script de upload automático
-print_step "Criando script de upload automático..."
+# Script de upload
 cat > /root/upload-to-gdrive.sh << 'EOFSCRIPT'
 #!/bin/bash
-
 COMPLETED_DIR="/root/torrents/completed"
 GDRIVE_PATH="gdrive:GDRIVE_FOLDER_PLACEHOLDER"
 LOG_FILE="/var/log/gdrive-upload.log"
 LOCK_FILE="/tmp/gdrive-upload.lock"
 
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
-}
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"; }
 
 if [ -f "$LOCK_FILE" ]; then
-    log "Script já está em execução. Saindo..."
+    log "Script já em execução. Saindo..."
     exit 0
 fi
 
@@ -415,8 +285,7 @@ if [ ! "$(ls -A $COMPLETED_DIR 2>/dev/null)" ]; then
     exit 0
 fi
 
-log "=== Iniciando upload para Google Drive ==="
-log "Arquivos a serem enviados:"
+log "=== Iniciando upload ==="
 ls -lh "$COMPLETED_DIR" | tee -a "$LOG_FILE"
 
 rclone move "$COMPLETED_DIR/" "$GDRIVE_PATH/" \
@@ -430,12 +299,10 @@ rclone move "$COMPLETED_DIR/" "$GDRIVE_PATH/" \
     --delete-empty-src-dirs \
     --log-file="$LOG_FILE" \
     --log-level INFO \
-    --stats=30s \
-    --stats-one-line
+    --stats=30s
 
 if [ $? -eq 0 ]; then
-    log "=== Upload concluído com sucesso! ==="
-    log "Arquivos movidos para: $GDRIVE_PATH"
+    log "=== Upload concluído! ==="
 else
     log "!!! ERRO no upload !!!"
     exit 1
@@ -447,30 +314,22 @@ EOFSCRIPT
 
 sed -i "s/GDRIVE_FOLDER_PLACEHOLDER/$GDRIVE_FOLDER/g" /root/upload-to-gdrive.sh
 chmod +x /root/upload-to-gdrive.sh
-print_success "Script de upload criado: /root/upload-to-gdrive.sh"
 
 # Script de upload forçado
-print_step "Criando script de upload manual..."
 cat > /root/force-upload.sh << 'EOFSCRIPT'
 #!/bin/bash
-echo "🚀 Forçando upload manual para Google Drive..."
-echo ""
+echo "🚀 Forçando upload para Google Drive..."
 pkill -f upload-to-gdrive.sh 2>/dev/null
 /root/upload-to-gdrive.sh
-echo ""
-echo "✅ Processo finalizado!"
+echo "✅ Concluído!"
 EOFSCRIPT
 chmod +x /root/force-upload.sh
-print_success "Script de upload manual criado: /root/force-upload.sh"
 
-# Script de monitoramento simples
-print_step "Criando script de monitoramento..."
+# Script de monitoramento
 cat > /root/monitor.sh << 'EOFSCRIPT'
 #!/bin/bash
-
 GREEN='\033[1;32m'
 BLUE='\033[1;36m'
-YELLOW='\033[1;33m'
 WHITE='\033[1;37m'
 GRAY='\033[0;37m'
 NC='\033[0m'
@@ -484,7 +343,6 @@ while true; do
     date
     echo ""
     
-    # Status qBittorrent
     if pgrep -x "qbittorrent-nox" > /dev/null; then
         echo -e "${GREEN}✓ qBittorrent: Rodando${NC}"
     else
@@ -503,7 +361,7 @@ while true; do
     
     echo ""
     echo -e "${BLUE}💾 Espaço em disco:${NC}"
-    df -h /root | tail -1 | awk -v gray="$GRAY" -v nc="$NC" '{print "   " gray $4" livres de "$2" ("$5" usado)" nc}'
+    df -h /root | tail -1 | awk '{print "   "$4" livres de "$2" ("$5" usado)"}'
     
     echo ""
     echo -e "${GRAY}🔄 Atualiza a cada 5 segundos | Ctrl+C para sair${NC}"
@@ -511,259 +369,173 @@ while true; do
 done
 EOFSCRIPT
 chmod +x /root/monitor.sh
-print_success "Script de monitoramento criado: /root/monitor.sh"
 
-# Configurar cron
-print_step "Configurando cron job para upload automático..."
-(crontab -l 2>/dev/null | grep -v upload-to-gdrive.sh; echo "0 * * * * /root/upload-to-gdrive.sh") | crontab -
-print_success "Cron job configurado: upload a cada 1 hora"
+print_success "Scripts criados"
 
-# ============================================
-# VERIFICAÇÃO FINAL DO SISTEMA
-# ============================================
-print_header "VERIFICAÇÃO FINAL DO SISTEMA"
-
-print_step "Verificando instalações e configurações..."
+# Configurar horário do cron
 echo ""
+print_step "Configurar horário do upload automático:"
+echo ""
+echo -e "  ${GREEN}1)${NC} A cada 1 hora (padrão)"
+echo -e "  ${GREEN}2)${NC} A cada 30 minutos"
+echo -e "  ${GREEN}3)${NC} A cada 2 horas"
+echo -e "  ${GREEN}4)${NC} A cada 6 horas"
+echo -e "  ${GREEN}5)${NC} Personalizado"
+echo ""
+read -p "Escolha [1-5]: " CRON_CHOICE
 
-# Array para armazenar resultados
+case $CRON_CHOICE in
+    2) CRON_TIME="*/30 * * * *" ;;
+    3) CRON_TIME="0 */2 * * *" ;;
+    4) CRON_TIME="0 */6 * * *" ;;
+    5) 
+        echo ""
+        print_step "Formato: minuto hora dia mês dia_semana"
+        print_info "Exemplos:"
+        echo -e "  ${GRAY}0 */3 * * * (a cada 3 horas)${NC}"
+        echo -e "  ${GRAY}0 2,14 * * * (às 2h e 14h)${NC}"
+        read -p "Digite o horário: " CRON_TIME
+        ;;
+    *) CRON_TIME="0 * * * *" ;;
+esac
+
+(crontab -l 2>/dev/null | grep -v upload-to-gdrive.sh; echo "$CRON_TIME /root/upload-to-gdrive.sh") | crontab -
+print_success "Cron configurado: $CRON_TIME"
+
+# ============================================
+# CONFIGURAÇÃO DO FIREWALL (UFW)
+# ============================================
+print_header "Configurando Firewall (UFW)"
+
+print_step "Configurando regras do firewall..."
+
+# Desabilitar UFW temporariamente para configurar
+ufw --force disable > /dev/null 2>&1
+
+# Resetar regras
+ufw --force reset > /dev/null 2>&1
+
+# Regras padrão
+ufw default deny incoming > /dev/null 2>&1
+ufw default allow outgoing > /dev/null 2>&1
+
+# Permitir SSH (porta 22)
+ufw allow 22/tcp comment 'SSH' > /dev/null 2>&1
+
+# Permitir qBittorrent Web UI (porta 8080)
+ufw allow 8080/tcp comment 'qBittorrent Web UI' > /dev/null 2>&1
+
+# Permitir portas de torrent (6881-6889)
+ufw allow 6881:6889/tcp comment 'qBittorrent Torrents TCP' > /dev/null 2>&1
+ufw allow 6881:6889/udp comment 'qBittorrent Torrents UDP' > /dev/null 2>&1
+
+# Habilitar UFW
+ufw --force enable > /dev/null 2>&1
+
+print_success "Firewall configurado!"
+print_info "Portas liberadas:"
+echo -e "  ${GRAY}• 22 (SSH)${NC}"
+echo -e "  ${GRAY}• 8080 (qBittorrent Web)${NC}"
+echo -e "  ${GRAY}• 6881-6889 (Torrents)${NC}"
+
+# ============================================
+# VERIFICAÇÃO FINAL
+# ============================================
+print_header "Verificação Final do Sistema"
+
 declare -A CHECKS
 
-# Verificar qBittorrent
+# Verificar componentes
 if pgrep -x "qbittorrent-nox" > /dev/null; then
     CHECKS[qbittorrent]="OK"
-    print_success "qBittorrent-nox está rodando"
+    print_success "qBittorrent rodando"
 else
     CHECKS[qbittorrent]="ERRO"
-    print_error "qBittorrent-nox NÃO está rodando"
+    print_error "qBittorrent não está rodando"
 fi
 
-# Verificar porta 8080
-if netstat -tulpn 2>/dev/null | grep -q ":8080"; then
-    CHECKS[porta]="OK"
-    print_success "Porta 8080 está aberta e escutando"
-else
-    CHECKS[porta]="AVISO"
-    print_warning "Porta 8080 pode precisar ser liberada no firewall"
-fi
-
-# Verificar rclone config
-if [ -f "/root/.config/rclone/rclone.conf" ]; then
-    CHECKS[rclone_config]="OK"
-    print_success "Arquivo de configuração rclone existe"
-else
-    CHECKS[rclone_config]="ERRO"
-    print_error "Configuração rclone não encontrada"
-fi
-
-# Verificar conexão Google Drive
 if rclone lsd gdrive: > /dev/null 2>&1; then
-    CHECKS[gdrive_conexao]="OK"
-    print_success "Conexão com Google Drive funcionando"
+    CHECKS[gdrive]="OK"
+    print_success "Google Drive conectado"
 else
-    CHECKS[gdrive_conexao]="ERRO"
-    print_error "Erro na conexão com Google Drive"
+    CHECKS[gdrive]="ERRO"
+    print_error "Erro no Google Drive"
 fi
 
-# Verificar estrutura de pastas
-if [ -d "/root/torrents/completed" ] && [ -d "/root/torrents/incomplete" ]; then
-    CHECKS[pastas]="OK"
-    print_success "Estrutura de pastas criada corretamente"
-else
-    CHECKS[pastas]="ERRO"
-    print_error "Estrutura de pastas incorreta"
-fi
-
-# Verificar scripts
-SCRIPTS=("/root/upload-to-gdrive.sh" "/root/force-upload.sh" "/root/monitor.sh")
-SCRIPTS_OK=true
-for script in "${SCRIPTS[@]}"; do
-    if [ -x "$script" ]; then
-        :
-    else
-        SCRIPTS_OK=false
-        break
-    fi
-done
-
-if $SCRIPTS_OK; then
-    CHECKS[scripts]="OK"
-    print_success "Todos os scripts criados e executáveis"
-else
-    CHECKS[scripts]="ERRO"
-    print_error "Alguns scripts não foram criados corretamente"
-fi
-
-# Verificar cron
 if crontab -l 2>/dev/null | grep -q "upload-to-gdrive.sh"; then
     CHECKS[cron]="OK"
-    print_success "Cron job configurado corretamente"
+    print_success "Cron job configurado"
 else
     CHECKS[cron]="ERRO"
-    print_error "Cron job não foi configurado"
+    print_error "Cron job não configurado"
 fi
 
-# Verificar screen sessions
-if screen -ls 2>/dev/null | grep -q "qbittorrent"; then
-    CHECKS[screen]="OK"
-    print_success "Screen session do qBittorrent ativa"
+if ufw status | grep -q "Status: active"; then
+    CHECKS[firewall]="OK"
+    print_success "Firewall ativo"
 else
-    CHECKS[screen]="AVISO"
-    print_warning "Screen session não detectada"
+    CHECKS[firewall]="AVISO"
+    print_warning "Firewall não ativo"
 fi
-
-echo ""
-print_step "Resumo da verificação:"
-TOTAL_CHECKS=0
-OK_CHECKS=0
-for check in "${CHECKS[@]}"; do
-    ((TOTAL_CHECKS++))
-    [[ "$check" == "OK" ]] && ((OK_CHECKS++))
-done
-
-echo -e "  ${WHITE}$OK_CHECKS de $TOTAL_CHECKS verificações passaram${NC}"
 
 # ============================================
 # EXIBIR INFORMAÇÕES FINAIS
 # ============================================
+sleep 1
 clear
 
-# Pegar IP do servidor
+# Pegar IP
 IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 
-cat << EOF
-
-${GREEN}╔═══════════════════════════════════════════════════════════════════╗
-║                                                                   ║
-║              ✅ INSTALAÇÃO CONCLUÍDA COM SUCESSO! ✅               ║
-║                                                                   ║
-╚═══════════════════════════════════════════════════════════════════╝${NC}
-
-${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
-${WHITE}📋 INFORMAÇÕES DE ACESSO${NC}
-${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
-
-${GREEN}🌐 qBittorrent Web Interface:${NC}
-   ${WHITE}URL:${NC} ${YELLOW}http://$IP:8080${NC}
-   ${WHITE}Usuário:${NC} ${YELLOW}admin${NC}
-   ${WHITE}Senha:${NC} ${YELLOW}$QB_PASSWORD${NC}
-
-${GREEN}📁 Google Drive:${NC}
-   ${WHITE}Pasta:${NC} ${YELLOW}gdrive:$GDRIVE_FOLDER${NC}
-   ${WHITE}Upload automático:${NC} ${YELLOW}A cada 1 hora${NC}
-
-${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
-${WHITE}🚀 COMANDOS ÚTEIS${NC}
-${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
-
-${GREEN}Forçar upload manual:${NC}
-   ${GRAY}\$ ${YELLOW}/root/force-upload.sh${NC}
-
-${GREEN}Monitorar downloads:${NC}
-   ${GRAY}\$ ${YELLOW}/root/monitor.sh${NC}
-
-${GREEN}Ver velocidade da conexão:${NC}
-   ${GRAY}\$ ${YELLOW}speedtest-cli${NC}
-
-${GREEN}Ver logs de upload:${NC}
-   ${GRAY}\$ ${YELLOW}tail -f /var/log/gdrive-upload.log${NC}
-
-${GREEN}Reiniciar qBittorrent:${NC}
-   ${GRAY}\$ ${YELLOW}pkill qbittorrent-nox${NC}
-   ${GRAY}\$ ${YELLOW}screen -dmS qbittorrent qbittorrent-nox${NC}
-
-${GREEN}Ver status do qBittorrent:${NC}
-   ${GRAY}\$ ${YELLOW}screen -r qbittorrent${NC}
-   ${GRAY}(Sair: Ctrl+A depois D)${NC}
-
-${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
-${WHITE}📖 COMO USAR${NC}
-${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
-
-${WHITE}1.${NC} Acesse a interface web: ${YELLOW}http://$IP:8080${NC}
-${WHITE}2.${NC} Faça login com ${YELLOW}admin${NC} / ${YELLOW}$QB_PASSWORD${NC}
-${WHITE}3.${NC} Adicione torrents via magnet link ou arquivo .torrent
-${WHITE}4.${NC} Aguarde o download finalizar
-${WHITE}5.${NC} ${GREEN}O upload para Google Drive é AUTOMÁTICO!${NC}
-${WHITE}6.${NC} Ou force manualmente: ${YELLOW}/root/force-upload.sh${NC}
-
-${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
-${WHITE}⚙️  STATUS DO SISTEMA${NC}
-${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
-
-EOF
-
-# Exibir status de cada componente
-if [ "${CHECKS[qbittorrent]}" == "OK" ]; then
-    echo -e "${GREEN}✓${NC} qBittorrent: ${GREEN}Rodando${NC}"
-else
-    echo -e "${RED}✗${NC} qBittorrent: ${RED}Erro${NC}"
-fi
-
-if [ "${CHECKS[gdrive_conexao]}" == "OK" ]; then
-    echo -e "${GREEN}✓${NC} Google Drive: ${GREEN}Conectado${NC}"
-else
-    echo -e "${RED}✗${NC} Google Drive: ${RED}Erro na conexão${NC}"
-fi
-
-if [ "${CHECKS[cron]}" == "OK" ]; then
-    echo -e "${GREEN}✓${NC} Upload automático: ${GREEN}Configurado (1x por hora)${NC}"
-else
-    echo -e "${RED}✗${NC} Upload automático: ${RED}Não configurado${NC}"
-fi
-
-if [ "${CHECKS[scripts]}" == "OK" ]; then
-    echo -e "${GREEN}✓${NC} Scripts: ${GREEN}Todos criados${NC}"
-else
-    echo -e "${RED}✗${NC} Scripts: ${RED}Erro${NC}"
-fi
-
-# Exibir cron jobs
-echo ""
-echo -e "${BLUE}📅 Cron Jobs Configurados:${NC}"
-crontab -l 2>/dev/null | grep -v "^#" | grep -v "^$" | while read line; do
-    echo -e "   ${GRAY}• $line${NC}"
-done
-
+echo -e "${GREEN}╔═══════════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║                                                                   ║${NC}"
+echo -e "${GREEN}║              ✅ INSTALAÇÃO CONCLUÍDA COM SUCESSO! ✅               ║${NC}"
+echo -e "${GREEN}║                                                                   ║${NC}"
+echo -e "${GREEN}╚═══════════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${WHITE}⚠️  IMPORTANTE${NC}"
+echo -e "${WHITE}📋 INFORMAÇÕES DE ACESSO${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo -e "${GREEN}🌐 qBittorrent Web Interface:${NC}"
+echo -e "   ${WHITE}URL:${NC} ${YELLOW}http://$IP:8080${NC}"
+echo -e "   ${WHITE}Usuário:${NC} ${YELLOW}admin${NC}"
+echo -e "   ${WHITE}Senha:${NC} ${YELLOW}$QB_PASSWORD${NC}"
+echo ""
+echo -e "${GREEN}📁 Google Drive:${NC}"
+echo -e "   ${WHITE}Pasta:${NC} ${YELLOW}gdrive:$GDRIVE_FOLDER${NC}"
+echo -e "   ${WHITE}Upload automático:${NC} ${YELLOW}$CRON_TIME${NC}"
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${WHITE}🚀 COMANDOS ÚTEIS${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo -e "${GREEN}Forçar upload manual:${NC}"
+echo -e "   ${GRAY}\$${NC} ${YELLOW}/root/force-upload.sh${NC}"
+echo ""
+echo -e "${GREEN}Monitorar downloads:${NC}"
+echo -e "   ${GRAY}\$${NC} ${YELLOW}/root/monitor.sh${NC}"
+echo ""
+echo -e "${GREEN}Ver velocidade:${NC}"
+echo -e "   ${GRAY}\$${NC} ${YELLOW}speedtest-cli${NC}"
+echo ""
+echo -e "${GREEN}Ver logs:${NC}"
+echo -e "   ${GRAY}\$${NC} ${YELLOW}tail -f /var/log/gdrive-upload.log${NC}"
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${WHITE}⚙️  STATUS DO SISTEMA${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-if [ "${CHECKS[porta]}" != "OK" ]; then
-    echo -e "${YELLOW}⚠${NC}  A porta 8080 pode estar bloqueada no firewall."
-    echo -e "   ${GRAY}Libere a porta com: ${YELLOW}ufw allow 8080/tcp${NC}"
-    echo ""
-fi
+# Status
+[ "${CHECKS[qbittorrent]}" == "OK" ] && echo -e "${GREEN}✓${NC} qBittorrent: ${GREEN}Rodando${NC}" || echo -e "${RED}✗${NC} qBittorrent: ${RED}Erro${NC}"
+[ "${CHECKS[gdrive]}" == "OK" ] && echo -e "${GREEN}✓${NC} Google Drive: ${GREEN}Conectado${NC}" || echo -e "${RED}✗${NC} Google Drive: ${RED}Erro${NC}"
+[ "${CHECKS[cron]}" == "OK" ] && echo -e "${GREEN}✓${NC} Upload automático: ${GREEN}Configurado${NC}" || echo -e "${RED}✗${NC} Upload automático: ${RED}Erro${NC}"
+[ "${CHECKS[firewall]}" == "OK" ] && echo -e "${GREEN}✓${NC} Firewall: ${GREEN}Ativo${NC}" || echo -e "${YELLOW}⚠${NC} Firewall: ${YELLOW}Inativo${NC}"
 
-echo -e "${GRAY}Se você não conseguir acessar a interface web:${NC}"
-echo -e "  ${GRAY}1. Verifique o firewall: ${YELLOW}ufw status${NC}"
-echo -e "  ${GRAY}2. Libere a porta 8080: ${YELLOW}ufw allow 8080/tcp${NC}"
-echo -e "  ${GRAY}3. Ou use túnel SSH: ${YELLOW}ssh -L 8080:localhost:8080 root@$IP${NC}"
 echo ""
-
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-# Perguntar se quer fazer teste de velocidade
-read -p "Deseja fazer um teste de velocidade agora? [s/N]: " RUN_SPEEDTEST
-
-if [[ "$RUN_SPEEDTEST" =~ ^[Ss]$ ]]; then
-    echo ""
-    print_header "Executando Teste de Velocidade"
-    speedtest-cli
-    echo ""
-fi
-
-# Perguntar se quer abrir o monitor
-echo ""
-read -p "Deseja iniciar o monitor de downloads agora? [s/N]: " RUN_MONITOR
-
-if [[ "$RUN_MONITOR" =~ ^[Ss]$ ]]; then
-    /root/monitor.sh
-fi
-
-echo ""
-print_success "Instalação finalizada! Aproveite seu sistema de downloads!"
+print_success "Tudo pronto! Acesse: http://$IP:8080"
 echo ""
