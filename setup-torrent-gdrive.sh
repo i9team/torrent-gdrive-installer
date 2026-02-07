@@ -24,19 +24,78 @@ print_header() {
     echo ""
 }
 
-# Spinner para processos longos
+# Spinner melhorado
 spinner() {
-    local pid=$1
+    local pid=$!
     local delay=0.1
-    local spinstr='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-    while [ "$(ps a | awk '{print $1}' | grep $pid)" ]; do
+    local spinstr='|/-\'
+    echo -n " "
+    while ps -p $pid > /dev/null 2>&1; do
         local temp=${spinstr#?}
-        printf " [${BLUE}%c${NC}]  " "$spinstr"
+        printf "\b${BLUE}%c${NC}" "$spinstr"
         local spinstr=$temp${spinstr%"$temp"}
         sleep $delay
-        printf "\b\b\b\b\b\b"
     done
-    printf "    \b\b\b\b"
+    printf "\b"
+}
+
+# Função de menu interativo com setas
+menu_select() {
+    local prompt="$1"
+    shift
+    local options=("$@")
+    local selected=0
+    local key
+
+    # Esconder cursor
+    tput civis
+
+    while true; do
+        # Limpar área do menu
+        for i in "${!options[@]}"; do
+            tput cuu1 2>/dev/null
+            tput el
+        done
+        tput cuu1 2>/dev/null
+        tput el
+
+        # Mostrar prompt
+        echo -e "${WHITE}$prompt${NC}"
+        
+        # Mostrar opções
+        for i in "${!options[@]}"; do
+            if [ $i -eq $selected ]; then
+                echo -e "  ${GREEN}▶ ${options[$i]}${NC}"
+            else
+                echo -e "    ${GRAY}${options[$i]}${NC}"
+            fi
+        done
+
+        # Ler tecla
+        read -rsn1 key
+        
+        case "$key" in
+            $'\x1b')  # ESC sequence
+                read -rsn2 key
+                case "$key" in
+                    '[A') # Seta para cima
+                        ((selected--))
+                        [ $selected -lt 0 ] && selected=$((${#options[@]} - 1))
+                        ;;
+                    '[B') # Seta para baixo
+                        ((selected++))
+                        [ $selected -ge ${#options[@]} ] && selected=0
+                        ;;
+                esac
+                ;;
+            '') # Enter
+                # Mostrar cursor
+                tput cnorm
+                echo ""
+                return $selected
+                ;;
+        esac
+    done
 }
 
 # Verifica se está rodando como root
@@ -68,15 +127,17 @@ read -p "Pressione ENTER para continuar ou Ctrl+C para cancelar..."
 # ============================================
 print_header "ETAPA 1/6: Atualizando Sistema"
 print_step "Atualizando pacotes do sistema..."
-apt update > /dev/null 2>&1 & spinner $!
+apt update > /dev/null 2>&1 &
+spinner
 print_success "Sistema atualizado!"
 
 # ============================================
 # ETAPA 2: Instalação de dependências
 # ============================================
 print_header "ETAPA 2/6: Instalando Dependências"
-print_step "Instalando pacotes necessários..."
-apt install -y qbittorrent-nox rclone curl screen python3 python3-pip speedtest-cli nload iftop wget net-tools jq ufw > /dev/null 2>&1 & spinner $!
+print_step "Instalando pacotes necessários (pode levar alguns minutos)..."
+apt install -y qbittorrent-nox rclone curl screen python3 python3-pip speedtest-cli nload iftop wget net-tools jq ufw > /dev/null 2>&1 &
+spinner
 print_success "Dependências instaladas!"
 
 # ============================================
@@ -105,11 +166,12 @@ cat > /root/.config/qBittorrent/qBittorrent.conf << EOF
 Downloads\SavePath=/root/torrents/completed
 Downloads\TempPath=/root/torrents/incomplete
 Downloads\TempPathEnabled=true
-WebUI\Address=*
+WebUI\Address=0.0.0.0
 WebUI\Port=8080
 WebUI\Username=admin
 WebUI\Password_PBKDF2="$QB_HASH"
 WebUI\LocalHostAuth=false
+WebUI\CSRFProtection=false
 General\Locale=pt_BR
 Bittorrent\DHT=true
 Bittorrent\PeX=true
@@ -146,13 +208,14 @@ print_header "ETAPA 5/6: Configurando Google Drive (rclone)"
 echo ""
 print_step "Escolha o método de autenticação:"
 echo ""
-echo -e "  ${GREEN}1)${NC} ${WHITE}OAuth (Recomendado)${NC}"
-echo -e "     ${GRAY}→ Mais fácil e rápido${NC}"
-echo ""
-echo -e "  ${GREEN}2)${NC} ${WHITE}Service Account${NC}"
-echo -e "     ${GRAY}→ Melhor para produção${NC}"
-echo ""
-read -p "Escolha [1 ou 2]: " AUTH_METHOD
+
+# Menu interativo para método de autenticação
+menu_select "Use as setas ↑↓ para selecionar e ENTER para confirmar:" \
+    "OAuth (Recomendado - mais fácil)" \
+    "Service Account (Avançado - melhor para produção)"
+
+AUTH_METHOD=$?
+AUTH_METHOD=$((AUTH_METHOD + 1))
 
 if [ "$AUTH_METHOD" == "1" ]; then
     # ===== OAUTH =====
@@ -249,11 +312,42 @@ else
     exit 1
 fi
 
-# Nome da pasta
+# Listar pastas do Google Drive e escolher
 echo ""
-read -p "Nome da pasta no Google Drive (padrão: VPS-DOWNLOADS): " GDRIVE_FOLDER
-GDRIVE_FOLDER=${GDRIVE_FOLDER:-VPS-DOWNLOADS}
+print_step "Buscando pastas no Google Drive..."
+sleep 1
 
+# Obter lista de pastas
+mapfile -t GDRIVE_FOLDERS < <(rclone lsd gdrive: 2>/dev/null | awk '{for(i=5;i<=NF;i++) printf "%s%s", $i, (i<NF?" ":""); print ""}')
+
+if [ ${#GDRIVE_FOLDERS[@]} -eq 0 ]; then
+    print_warning "Nenhuma pasta encontrada no Google Drive"
+    read -p "Digite o nome da nova pasta: " GDRIVE_FOLDER
+    GDRIVE_FOLDER=${GDRIVE_FOLDER:-VPS-DOWNLOADS}
+else
+    print_success "Pastas encontradas:"
+    echo ""
+    
+    # Adicionar opções
+    FOLDER_OPTIONS=("${GDRIVE_FOLDERS[@]}")
+    FOLDER_OPTIONS+=("📁 Criar nova pasta")
+    
+    # Menu para selecionar pasta
+    menu_select "Escolha a pasta de destino:" "${FOLDER_OPTIONS[@]}"
+    FOLDER_INDEX=$?
+    
+    if [ $FOLDER_INDEX -eq ${#GDRIVE_FOLDERS[@]} ]; then
+        # Criar nova pasta
+        echo ""
+        read -p "Digite o nome da nova pasta: " GDRIVE_FOLDER
+        GDRIVE_FOLDER=${GDRIVE_FOLDER:-VPS-DOWNLOADS}
+    else
+        # Usar pasta existente
+        GDRIVE_FOLDER="${GDRIVE_FOLDERS[$FOLDER_INDEX]}"
+    fi
+fi
+
+# Criar pasta no Google Drive (se não existir)
 rclone mkdir "gdrive:$GDRIVE_FOLDER" 2>/dev/null
 print_success "Pasta configurada: gdrive:$GDRIVE_FOLDER"
 
@@ -330,6 +424,7 @@ cat > /root/monitor.sh << 'EOFSCRIPT'
 #!/bin/bash
 GREEN='\033[1;32m'
 BLUE='\033[1;36m'
+YELLOW='\033[1;33m'
 WHITE='\033[1;37m'
 GRAY='\033[0;37m'
 NC='\033[0m'
@@ -372,35 +467,38 @@ chmod +x /root/monitor.sh
 
 print_success "Scripts criados"
 
-# Configurar horário do cron
+# Configurar horário do cron com menu
 echo ""
 print_step "Configurar horário do upload automático:"
 echo ""
-echo -e "  ${GREEN}1)${NC} A cada 1 hora (padrão)"
-echo -e "  ${GREEN}2)${NC} A cada 30 minutos"
-echo -e "  ${GREEN}3)${NC} A cada 2 horas"
-echo -e "  ${GREEN}4)${NC} A cada 6 horas"
-echo -e "  ${GREEN}5)${NC} Personalizado"
-echo ""
-read -p "Escolha [1-5]: " CRON_CHOICE
+
+menu_select "Use as setas ↑↓ para selecionar o intervalo:" \
+    "A cada 30 minutos" \
+    "A cada 1 hora (Recomendado)" \
+    "A cada 2 horas" \
+    "A cada 6 horas" \
+    "Personalizado (avançado)"
+
+CRON_CHOICE=$?
 
 case $CRON_CHOICE in
-    2) CRON_TIME="*/30 * * * *" ;;
-    3) CRON_TIME="0 */2 * * *" ;;
-    4) CRON_TIME="0 */6 * * *" ;;
-    5) 
+    0) CRON_TIME="*/30 * * * *"; CRON_DESC="a cada 30 minutos" ;;
+    1) CRON_TIME="0 * * * *"; CRON_DESC="a cada 1 hora" ;;
+    2) CRON_TIME="0 */2 * * *"; CRON_DESC="a cada 2 horas" ;;
+    3) CRON_TIME="0 */6 * * *"; CRON_DESC="a cada 6 horas" ;;
+    4) 
         echo ""
         print_step "Formato: minuto hora dia mês dia_semana"
         print_info "Exemplos:"
         echo -e "  ${GRAY}0 */3 * * * (a cada 3 horas)${NC}"
         echo -e "  ${GRAY}0 2,14 * * * (às 2h e 14h)${NC}"
         read -p "Digite o horário: " CRON_TIME
+        CRON_DESC="personalizado: $CRON_TIME"
         ;;
-    *) CRON_TIME="0 * * * *" ;;
 esac
 
 (crontab -l 2>/dev/null | grep -v upload-to-gdrive.sh; echo "$CRON_TIME /root/upload-to-gdrive.sh") | crontab -
-print_success "Cron configurado: $CRON_TIME"
+print_success "Cron configurado: $CRON_DESC"
 
 # ============================================
 # CONFIGURAÇÃO DO FIREWALL (UFW)
@@ -409,7 +507,10 @@ print_header "Configurando Firewall (UFW)"
 
 print_step "Configurando regras do firewall..."
 
-# Desabilitar UFW temporariamente para configurar
+# Verificar se há firewall externo bloqueando
+EXTERNAL_FIREWALL=false
+
+# Desabilitar UFW temporariamente
 ufw --force disable > /dev/null 2>&1
 
 # Resetar regras
@@ -419,24 +520,34 @@ ufw --force reset > /dev/null 2>&1
 ufw default deny incoming > /dev/null 2>&1
 ufw default allow outgoing > /dev/null 2>&1
 
-# Permitir SSH (porta 22)
+# Permitir SSH
 ufw allow 22/tcp comment 'SSH' > /dev/null 2>&1
 
-# Permitir qBittorrent Web UI (porta 8080)
+# Permitir qBittorrent Web UI
 ufw allow 8080/tcp comment 'qBittorrent Web UI' > /dev/null 2>&1
 
-# Permitir portas de torrent (6881-6889)
+# Permitir portas de torrent
 ufw allow 6881:6889/tcp comment 'qBittorrent Torrents TCP' > /dev/null 2>&1
 ufw allow 6881:6889/udp comment 'qBittorrent Torrents UDP' > /dev/null 2>&1
 
 # Habilitar UFW
-ufw --force enable > /dev/null 2>&1
+echo "y" | ufw enable > /dev/null 2>&1
 
 print_success "Firewall configurado!"
-print_info "Portas liberadas:"
-echo -e "  ${GRAY}• 22 (SSH)${NC}"
-echo -e "  ${GRAY}• 8080 (qBittorrent Web)${NC}"
-echo -e "  ${GRAY}• 6881-6889 (Torrents)${NC}"
+
+# Verificar se porta 8080 está acessível de fora
+print_step "Verificando acessibilidade da porta 8080..."
+sleep 2
+
+if timeout 3 bash -c "</dev/tcp/127.0.0.1/8080" 2>/dev/null; then
+    print_success "Porta 8080 está acessível localmente"
+    
+    # Verificar se firewall externo pode estar bloqueando
+    print_warning "Se não conseguir acessar de fora, verifique o painel do provedor VPS"
+else
+    print_warning "Porta 8080 pode não estar acessível"
+    EXTERNAL_FIREWALL=true
+fi
 
 # ============================================
 # VERIFICAÇÃO FINAL
@@ -472,10 +583,10 @@ fi
 
 if ufw status | grep -q "Status: active"; then
     CHECKS[firewall]="OK"
-    print_success "Firewall ativo"
+    print_success "Firewall UFW ativo"
 else
     CHECKS[firewall]="AVISO"
-    print_warning "Firewall não ativo"
+    print_warning "Firewall UFW não ativo"
 fi
 
 # ============================================
@@ -504,7 +615,7 @@ echo -e "   ${WHITE}Senha:${NC} ${YELLOW}$QB_PASSWORD${NC}"
 echo ""
 echo -e "${GREEN}📁 Google Drive:${NC}"
 echo -e "   ${WHITE}Pasta:${NC} ${YELLOW}gdrive:$GDRIVE_FOLDER${NC}"
-echo -e "   ${WHITE}Upload automático:${NC} ${YELLOW}$CRON_TIME${NC}"
+echo -e "   ${WHITE}Upload automático:${NC} ${YELLOW}$CRON_DESC${NC}"
 echo ""
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${WHITE}🚀 COMANDOS ÚTEIS${NC}"
@@ -531,11 +642,30 @@ echo ""
 [ "${CHECKS[qbittorrent]}" == "OK" ] && echo -e "${GREEN}✓${NC} qBittorrent: ${GREEN}Rodando${NC}" || echo -e "${RED}✗${NC} qBittorrent: ${RED}Erro${NC}"
 [ "${CHECKS[gdrive]}" == "OK" ] && echo -e "${GREEN}✓${NC} Google Drive: ${GREEN}Conectado${NC}" || echo -e "${RED}✗${NC} Google Drive: ${RED}Erro${NC}"
 [ "${CHECKS[cron]}" == "OK" ] && echo -e "${GREEN}✓${NC} Upload automático: ${GREEN}Configurado${NC}" || echo -e "${RED}✗${NC} Upload automático: ${RED}Erro${NC}"
-[ "${CHECKS[firewall]}" == "OK" ] && echo -e "${GREEN}✓${NC} Firewall: ${GREEN}Ativo${NC}" || echo -e "${YELLOW}⚠${NC} Firewall: ${YELLOW}Inativo${NC}"
+[ "${CHECKS[firewall]}" == "OK" ] && echo -e "${GREEN}✓${NC} Firewall UFW: ${GREEN}Ativo${NC}" || echo -e "${YELLOW}⚠${NC} Firewall UFW: ${YELLOW}Inativo${NC}"
 
 echo ""
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
 
-print_success "Tudo pronto! Acesse: http://$IP:8080"
+# Avisos importantes
+if [ "$EXTERNAL_FIREWALL" = true ]; then
+    echo -e "${YELLOW}⚠️  IMPORTANTE - Firewall Externo${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "${WHITE}Se não conseguir acessar http://$IP:8080:${NC}"
+    echo ""
+    echo -e "  ${YELLOW}1.${NC} Verifique o painel do seu provedor VPS"
+    echo -e "     ${GRAY}(Ex: Contabo, Hetzner, DigitalOcean, etc)${NC}"
+    echo ""
+    echo -e "  ${YELLOW}2.${NC} Libere a porta ${YELLOW}8080/tcp${NC} no firewall externo"
+    echo ""
+    echo -e "  ${YELLOW}3.${NC} Ou use túnel SSH temporariamente:"
+    echo -e "     ${GREEN}ssh -L 8080:localhost:8080 root@$IP${NC}"
+    echo -e "     ${GRAY}Depois acesse: http://localhost:8080${NC}"
+    echo ""
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+fi
+
+echo ""
+print_success "Instalação finalizada! Tente acessar: http://$IP:8080"
 echo ""
