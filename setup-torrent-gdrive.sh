@@ -159,37 +159,146 @@ print_step "Configure a senha de acesso ao qBittorrent:"
 read -p "Escolha uma senha (padrão: admin123): " QB_PASSWORD
 QB_PASSWORD=${QB_PASSWORD:-admin123}
 
-QB_HASH='@ByteArray(ARQ77eY1NUZaQsuDHbIMCA==:0WMRkYTUWVT9wVvdDtHAjU9b3b7uB8NR1Gur2hmQCvCDpm39Q+PsJRJPaCU51dEiz+dTzh8qbPsL8WkFljQYFQ==)'
+# Iniciar qBittorrent pela primeira vez para gerar config padrão
+print_step "Gerando configuração inicial do qBittorrent..."
+pkill qbittorrent-nox > /dev/null 2>&1
+timeout 5 qbittorrent-nox --webui-port=8080 > /dev/null 2>&1 &
+sleep 3
+pkill qbittorrent-nox > /dev/null 2>&1
+sleep 1
 
-cat > /root/.config/qBittorrent/qBittorrent.conf << EOF
+# Verificar se arquivo de config existe
+if [ ! -f "/root/.config/qBittorrent/qBittorrent.conf" ]; then
+    print_warning "Criando arquivo de configuração do zero..."
+    mkdir -p /root/.config/qBittorrent
+    cat > /root/.config/qBittorrent/qBittorrent.conf << 'EOF'
+[Application]
+FileLogger\Enabled=true
+FileLogger\Path=/var/log
+FileLogger\Backup=true
+FileLogger\MaxSizeBytes=66560
+FileLogger\DeleteOld=true
+FileLogger\Age=6
+FileLogger\AgeType=1
+
+[BitTorrent]
+Session\Categories=@Variant(\0\0\0\b\0\0\0\0)
+Session\DefaultSavePath=/root/torrents/completed
+Session\TempPath=/root/torrents/incomplete
+Session\TempPathEnabled=true
+
+[Core]
+AutoDeleteAddedTorrentFile=Never
+
+[Meta]
+MigrationVersion=6
+
+[Network]
+Cookies=@Invalid()
+
 [Preferences]
-Downloads\SavePath=/root/torrents/completed
-Downloads\TempPath=/root/torrents/incomplete
-Downloads\TempPathEnabled=true
-WebUI\Address=0.0.0.0
-WebUI\Port=8080
-WebUI\Username=admin
-WebUI\Password_PBKDF2="$QB_HASH"
-WebUI\LocalHostAuth=false
-WebUI\CSRFProtection=false
-General\Locale=pt_BR
+Advanced\RecheckOnCompletion=false
+Advanced\trackerPort=9000
+Bittorrent\MaxConnecs=-1
+Bittorrent\MaxConnecsPerTorrent=-1
+Bittorrent\MaxRatioAction=0
 Bittorrent\DHT=true
 Bittorrent\PeX=true
 Bittorrent\LSD=true
-Bittorrent\MaxConnecs=-1
-Bittorrent\MaxConnecsPerTorrent=-1
-Bittorrent\MaxUploads=-1
-Bittorrent\MaxUploadsPerTorrent=-1
-Downloads\FinishedTorrentExportDir=/root/torrents/watched
+Connection\GlobalDLLimitAlt=0
+Connection\GlobalUPLimitAlt=50
 Connection\PortRangeMin=6881
 Connection\PortRangeMax=6889
 Connection\UPnP=false
-Connection\GlobalDLLimitAlt=0
-Connection\GlobalUPLimitAlt=50
+Downloads\SavePath=/root/torrents/completed
+Downloads\TempPath=/root/torrents/incomplete
+Downloads\TempPathEnabled=true
+Downloads\FinishedTorrentExportDir=/root/torrents/watched
+General\Locale=pt_BR
+WebUI\Address=0.0.0.0
+WebUI\AlternativeUIEnabled=false
+WebUI\AuthSubnetWhitelistEnabled=false
+WebUI\BanDuration=3600
+WebUI\CSRFProtection=false
+WebUI\ClickjackingProtection=true
+WebUI\CustomHTTPHeaders=
+WebUI\CustomHTTPHeadersEnabled=false
+WebUI\HTTPS\CertificatePath=
+WebUI\HTTPS\Enabled=false
+WebUI\HTTPS\KeyPath=
+WebUI\HostHeaderValidation=false
+WebUI\LocalHostAuth=false
+WebUI\MaxAuthenticationFailCount=5
+WebUI\Port=8080
+WebUI\ReverseProxySupportEnabled=false
+WebUI\RootFolder=
+WebUI\SecureCookie=true
+WebUI\ServerDomains=*
+WebUI\SessionTimeout=3600
+WebUI\UseUPnP=false
+WebUI\Username=admin
+WebUI\Password_PBKDF2="@ByteArray(ARQ77eY1NUZaQsuDHbIMCA==:0WMRkYTUWVT9wVvdDtHAjU9b3b7uB8NR1Gur2hmQCvCDpm39Q+PsJRJPaCU51dEiz+dTzh8qbPsL8WkFljQYFQ==)"
+
+[RSS]
+AutoDownloader\DownloadRepacks=true
+AutoDownloader\SmartEpisodeFilter=s(\\d+)e(\\d+), (\\d+)x(\\d+), "(\\d{4}[.\\-]\\d{1,2}[.\\-]\\d{1,2})", "(\\d{1,2}[.\\-]\\d{1,2}[.\\-]\\d{4})"
 EOF
+else
+    # Modificar configurações específicas preservando o resto
+    print_step "Modificando configurações do qBittorrent..."
+    
+    # Backup do arquivo original
+    cp /root/.config/qBittorrent/qBittorrent.conf /root/.config/qBittorrent/qBittorrent.conf.backup
+    
+    # Função para atualizar ou adicionar configuração
+    update_config() {
+        local section="$1"
+        local key="$2"
+        local value="$3"
+        local file="/root/.config/qBittorrent/qBittorrent.conf"
+        
+        # Verificar se a seção existe
+        if grep -q "^\[$section\]" "$file"; then
+            # Verificar se a chave existe na seção
+            if sed -n "/^\[$section\]/,/^\[/p" "$file" | grep -q "^$key="; then
+                # Atualizar valor existente
+                sed -i "/^\[$section\]/,/^\[/{s|^$key=.*|$key=$value|}" "$file"
+            else
+                # Adicionar chave na seção
+                sed -i "/^\[$section\]/a $key=$value" "$file"
+            fi
+        else
+            # Adicionar seção e chave
+            echo "" >> "$file"
+            echo "[$section]" >> "$file"
+            echo "$key=$value" >> "$file"
+        fi
+    }
+    
+    # Aplicar configurações personalizadas
+    update_config "Preferences" "Downloads\SavePath" "/root/torrents/completed"
+    update_config "Preferences" "Downloads\TempPath" "/root/torrents/incomplete"
+    update_config "Preferences" "Downloads\TempPathEnabled" "true"
+    update_config "Preferences" "Downloads\FinishedTorrentExportDir" "/root/torrents/watched"
+    update_config "Preferences" "WebUI\Address" "0.0.0.0"
+    update_config "Preferences" "WebUI\Port" "8080"
+    update_config "Preferences" "WebUI\Username" "admin"
+    update_config "Preferences" "WebUI\Password_PBKDF2" "\"@ByteArray(ARQ77eY1NUZaQsuDHbIMCA==:0WMRkYTUWVT9wVvdDtHAjU9b3b7uB8NR1Gur2hmQCvCDpm39Q+PsJRJPaCU51dEiz+dTzh8qbPsL8WkFljQYFQ==)\""
+    update_config "Preferences" "WebUI\LocalHostAuth" "false"
+    update_config "Preferences" "WebUI\CSRFProtection" "false"
+    update_config "Preferences" "WebUI\HostHeaderValidation" "false"
+    update_config "Preferences" "General\Locale" "pt_BR"
+    update_config "Preferences" "Bittorrent\DHT" "true"
+    update_config "Preferences" "Bittorrent\PeX" "true"
+    update_config "Preferences" "Bittorrent\LSD" "true"
+    update_config "Preferences" "Connection\PortRangeMin" "6881"
+    update_config "Preferences" "Connection\PortRangeMax" "6889"
+    update_config "Preferences" "Connection\UPnP" "false"
+    update_config "Preferences" "Connection\GlobalDLLimitAlt" "0"
+    update_config "Preferences" "Connection\GlobalUPLimitAlt" "50"
+fi
 
 print_step "Iniciando qBittorrent..."
-pkill qbittorrent-nox > /dev/null 2>&1
 screen -dmS qbittorrent qbittorrent-nox
 sleep 3
 
